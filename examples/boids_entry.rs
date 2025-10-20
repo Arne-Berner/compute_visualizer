@@ -1,5 +1,0 @@
-mod boids;
-
-fn main(){
-
-}

@@ -38,6 +38,9 @@ var s_diffuse: sampler;
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let out = vec4f(linear_to_srgb(tex.xyz), 1.0);
 
-    return tex;
+
+
+    return out;
 }

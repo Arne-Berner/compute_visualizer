@@ -17,10 +17,12 @@ fn odd_even_sort(
     // tex = tex - 0.5;
 
     // let color: vec4<f32> = vec4f(norm_gid.xyz, 1.0);
-    var color = vec4f(0.5,0.5,0.5,1.0);
-    if tex.r == 1.0 {
-        color = tex;
+    var color: vec4<f32> = tex;
+    if tex.r > 0.5 {
+        color = vec4f(0.5,0.5,0.5,1.0);
+
     }
+
 
     // maybe get the image width via a uniform buffer
     textureStore(out_tex, vec2<i32>(gid.xy), color);

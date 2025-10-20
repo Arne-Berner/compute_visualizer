@@ -51,7 +51,6 @@ pub struct State {
     index_buffer: wgpu::Buffer,
     compute_pipeline: wgpu::ComputePipeline,
     num_indices: u32,
-    // NEW!
     diffuse_texture_in: texture::Texture,
     diffuse_texture_out: texture::Texture,
     diffuse_bind_group: wgpu::BindGroup,
@@ -128,7 +127,7 @@ impl State {
         // SETUP ENDS HERE
         // THIS IS THE TEXTURE
 
-        let diffuse_bytes = include_bytes!("test.png");
+        let diffuse_bytes = include_bytes!("textures/test.png");
         let diffuse_texture_in =
             texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "in_texture").unwrap();
         let diffuse_texture_out =
@@ -218,12 +217,12 @@ impl State {
 
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("compute-shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/compute-shader.wgsl").into()),
         });
 
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("render-shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/render-shader.wgsl").into()),
         });
 
 
@@ -315,13 +314,6 @@ impl State {
 
         let num_indices = INDICES.len() as u32;
 
-        // this should only run once, instead of every frame I guess.
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-
         Ok(Self {
             surface,
             device,
@@ -380,7 +372,6 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
-        // this needs to run every frame, otherwise the buffer will be cleared
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Pass"),
