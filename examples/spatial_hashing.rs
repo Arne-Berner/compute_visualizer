@@ -7,15 +7,15 @@ fn main() {
     // make sensible bounds for demo
     let bounds = Bounds::new_from_indices(0, 0, 100, 100);
     let cell_size = Dimensions {
-        columns: 10.0,
-        rows: 10.0,
+        width: 10.0,
+        height: 10.0,
     };
     let mut grid = SpatialHash::new(cell_size, bounds);
 
     let pos = Vec2::new(15.0, 15.0);
     let dimensions = Dimensions {
-        columns: 4.0,
-        rows: 4.0,
+        width: 4.0,
+        height: 4.0,
     };
 
     let mut ent = grid.create(pos, dimensions);
@@ -66,15 +66,15 @@ impl Cell {
 // this should be a private type, since the id only gets propagated via the hashgrid
 pub struct Entity {
     pos: Vec2,
-    size: Size,
+    dimensions: Dimensions,
     cells: Bounds,
     id: u32,
 }
 impl Entity {
-    fn new(pos: Vec2, size: Size, cells: Bounds, id: u32) -> Self {
+    fn new(pos: Vec2, dimensions: Dimensions, cells: Bounds, id: u32) -> Self {
         Self {
             pos,
-            size,
+            dimensions,
             cells,
             id,
         }
@@ -82,15 +82,9 @@ impl Entity {
 }
 
 #[derive(Default, Debug)]
-pub struct Size {
+pub struct Dimensions {
     width: f32,
     height: f32,
-}
-
-#[derive(Default, Debug)]
-pub struct Dimensions {
-    columns: i32,
-    rows: i32,
 }
 
 pub struct SpatialHash {
@@ -101,15 +95,14 @@ pub struct SpatialHash {
 }
 
 impl SpatialHash {
-    pub fn new(cell_size: Size, bounds: Bounds) -> Self {
+    pub fn new(cell_size: Dimensions, bounds: Bounds) -> Self {
         let cells = HashMap::default();
         let dimensions_x = (bounds.end.x - bounds.start.x) as f32 / cell_size.width;
         let dimensions_y = (bounds.end.y - bounds.start.y) as f32 / cell_size.height;
         let dimensions = Dimensions {
-            columns: dimensions_x,
-            rows: dimensions_y,
+            width: dimensions_x,
+            height: dimensions_y,
         };
-        dbg! {&dimensions};
         Self {
             cells,
             bounds,
@@ -151,8 +144,8 @@ impl SpatialHash {
 
     fn compute_cell_bounds(&self, pos: &Vec2, dimensions: &Dimensions) -> Bounds {
         let pos_start = Vec2::new(
-            pos.x - dimensions.columns / 2.0,
-            pos.y - dimensions.rows / 2.0,
+            pos.x - dimensions.width / 2.0,
+            pos.y - dimensions.height / 2.0,
         );
         if self.bounds.end.x == self.bounds.start.x {
             // TODO throw error
@@ -166,25 +159,22 @@ impl SpatialHash {
         let relative_pos_x = pos_start.x
             - self.bounds.start.x as f32 / self.bounds.end.x as f32
             - self.bounds.start.x as f32;
-        let relative_pos_y = pos_start.y
-            - self.bounds.start.y as f32 / self.bounds.end.y as f32
-            - self.bounds.start.y as f32;
-        let start_index_x = (relative_pos_x * self.dimensions.columns) as i32;
-        let start_index_y = (relative_pos_y * self.dimensions.rows) as i32;
+        let relative_pos_y =
+            pos_start.y - self.bounds.start.y / self.bounds.end.y - self.bounds.start.y;
+        let start_index_x = relative_pos_x * self.dimensions.width;
+        let start_index_y = relative_pos_y * self.dimensions.height;
 
         let pos_end = Vec2::new(
-            pos.x + dimensions.columns / 2.0,
-            pos.y + dimensions.rows / 2.0,
+            pos.x + dimensions.width / 2.0,
+            pos.y + dimensions.height / 2.0,
         );
         // TODO ensure that this is between 0 and 1
-        let relative_pos_x = pos_end.x
-            - self.bounds.start.x as f32 / self.bounds.end.x as f32
-            - self.bounds.start.x as f32;
-        let relative_pos_y = pos_end.y
-            - self.bounds.start.y as f32 / self.bounds.end.y as f32
-            - self.bounds.start.y as f32;
-        let end_index_x = (relative_pos_x * self.dimensions.columns) as i32;
-        let end_index_y = (relative_pos_y * self.dimensions.rows) as i32;
+        let relative_pos_x =
+            pos_end.x - self.bounds.start.x / self.bounds.end.x - self.bounds.start.x;
+        let relative_pos_y =
+            pos_end.y - self.bounds.start.y / self.bounds.end.y - self.bounds.start.y;
+        let end_index_x = relative_pos_x * self.dimensions.width;
+        let end_index_y = relative_pos_y * self.dimensions.height;
 
         Bounds::new_from_indices(start_index_x, start_index_y, end_index_x, end_index_y)
     }
@@ -222,15 +212,15 @@ mod tests {
         // this way some cells are empty and some are doubly occupied
         let bounds = Bounds::new_from_indices(0, 0, 100, 100);
         let cell_size = Dimensions {
-            columns: 10,
-            rows: 10,
+            width: 10,
+            height: 10,
         };
         let mut grid = SpatialHash::new(cell_size, bounds);
 
         let pos = Vec2::new(42, 42);
         let dimensions = Dimensions {
-            columns: 1,
-            rows: 1,
+            width: 1,
+            height: 1,
         };
         let ent = grid.create(pos, dimensions);
 
@@ -242,15 +232,15 @@ mod tests {
         // this way some cells are empty and some are doubly occupied
         let bounds = Bounds::new_from_indices(0, 0, 100, 100);
         let cell_size = Dimensions {
-            columns: 10,
-            rows: 10,
+            width: 10,
+            height: 10,
         };
         let mut grid = SpatialHash::new(cell_size, bounds);
 
         let pos = Vec2::new(42, 42);
         let dimensions = Dimensions {
-            columns: 4,
-            rows: 4,
+            width: 4,
+            height: 4,
         };
         let ent = grid.create(pos, dimensions);
 
@@ -262,15 +252,15 @@ mod tests {
         // this way some cells are empty and some are doubly occupied
         let bounds = Bounds::new_from_indices(0, 0, 100, 100);
         let cell_size = Dimensions {
-            columns: 10,
-            rows: 10,
+            width: 10,
+            height: 10,
         };
         let mut grid = SpatialHash::new(cell_size, bounds);
 
         let pos = Vec2::new(42, 42);
         let dimensions = Dimensions {
-            columns: 2,
-            rows: 3,
+            width: 2,
+            height: 3,
         };
         let ent = grid.create(pos, dimensions);
 
@@ -282,15 +272,15 @@ mod tests {
         // this way some cells are empty and some are doubly occupied
         let bounds = Bounds::new_from_indices(0, 0, 100, 100);
         let cell_size = Dimensions {
-            columns: 10,
-            rows: 10,
+            width: 10,
+            height: 10,
         };
         let mut grid = SpatialHash::new(cell_size, bounds);
 
         let pos = Vec2::new(-1, 102);
         let dimensions = Dimensions {
-            columns: 1,
-            rows: 1,
+            width: 1,
+            height: 1,
         };
         // Act & Assert
         let res = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -303,8 +293,8 @@ mod tests {
         // this way some cells are empty and some are doubly occupied
         let bounds = Bounds::new_from_indices(0, 0, 100, 100);
         let cell_size = Dimensions {
-            columns: 10,
-            rows: 10,
+            width: 10,
+            height: 10,
         };
         let mut grid = SpatialHash::new(cell_size, bounds);
 
@@ -316,8 +306,8 @@ mod tests {
             let y = (((i as i32) * 3) % 77);
             let pos = Vec2::new(x, y);
             let dimensions = Dimensions {
-                columns: 4,
-                rows: 4,
+                width: 4,
+                height: 4,
             };
             let ent = grid.create(pos, dimensions);
             entities.push(ent);

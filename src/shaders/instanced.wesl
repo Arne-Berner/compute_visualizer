@@ -102,5 +102,5 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let bg = vec4(1.0, 1.0, 1.0, 0.0);
 
     col = mix(bg, fg, col); 
-    return col;
+    return vec4<f32>(in.frag_pos_px);
 }

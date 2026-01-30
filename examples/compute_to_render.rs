@@ -1,24 +1,27 @@
-// TODO (finish copying obviously)
-// TODO rewrite so that it is actually a lib, same goes for bke, so that they can be combined.
-// TODO change white to black and vice versa, so that the actual blobs that are being created are 
-// the inside of the blobs
-// mod texture;
-// mod co;
-
-use std::{iter, mem, sync::Arc};
-use wesl::include_wesl;
 use bytemuck;
+use std::{iter, sync::Arc, time::Duration};
 
-
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
     window::Window,
 };
-use wgpu::util::DeviceExt;
+use rand::Rng;
 
+#[derive(Clone, Debug)]
+pub struct BufferBundle {
+    buffer: Vec<u32>,
+    width: u32,
+    height: u32,
+}
 
+#[derive(Clone, Debug)]
+enum UserEvent {
+    SetState(BufferBundle),
+    UpdateBuffer(BufferBundle),
+}
 // uniform buffers need to be 16 byte aligned. the fields are not necessary, but are more obvious
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
@@ -29,10 +32,10 @@ struct Vertex {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 struct Instance {
-    a: [f32; 2],   
-    b: [f32; 2],   
-    radius: f32,   
-    _pad: f32,     
+    a: [f32; 2],
+    b: [f32; 2],
+    radius: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -42,37 +45,39 @@ struct ScreenUniform {
     _pad: [f32; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
+struct TextureDimsUniform {
+    dims: [f32; 2], // width, height in pixels
+    _pad: [f32; 2],
+}
+
 pub struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
-    window: Arc<Window>,
 
-    vertex_buf: wgpu::Buffer,
-    index_buf: wgpu::Buffer,
-    index_count: u32,
-    instance_buf: wgpu::Buffer,
-    instance_count: u32,
+    window: Arc<Window>,
 
     screen_ubo: wgpu::Buffer,
     screen_bind_group: wgpu::BindGroup,
+
+    dims_ubo: wgpu::Buffer,
+    input_bind_group: wgpu::BindGroup,
 
     render_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
-    async fn new(window: Arc<Window>) -> anyhow::Result<State> {
+    async fn new(window: Arc<Window>, buffer_bundle: BufferBundle) -> anyhow::Result<State> {
         let win_size = window.inner_size();
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(not(target_arch = "wasm32"))]
             backends: wgpu::Backends::PRIMARY,
-            #[cfg(target_arch = "wasm32")]
-            backends: wgpu::Backends::GL,
             ..Default::default()
         });
 
@@ -88,22 +93,20 @@ impl State {
             .unwrap();
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    required_limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::default()
-                    },
-                    memory_hints: Default::default(),
-                    trace: wgpu::Trace::Off, // Trace path
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                // WebGL doesn't support all of wgpu's features, so if
+                // we're building for the web we'll have to disable some.
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::default()
                 },
-            )
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off, // Trace path
+            })
             .await
             .unwrap();
 
@@ -129,89 +132,8 @@ impl State {
         };
         // surface.configure(&device, &config);
 
-        // SETUP ENDS HERE
-        // THIS IS THE TEXTURE
-        
-        // Buffers 
-        let vertices: &[Vertex] = &[
-            Vertex { corner: [ 0.0,  0.0] },
-            Vertex { corner: [ 1.0,  0.0] },
-            Vertex { corner: [ 1.0,  1.0] },
-            Vertex { corner: [ 0.0,  1.0] },
-        ];
-        let indices: &[u16] = &[0, 1, 2, 2, 3, 0];
-
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad vertex buffer"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad index buffer"),
-            contents: bytemuck::cast_slice(indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        // radius is the line thickness here
-        let instances_data = vec![
-            // connected to D
-            Instance { a: [200.0, 200.0], b: [250.0, 286.6], radius: 10.0, _pad: 0.0 },
-            Instance { a: [250.0, 286.6], b: [300.0, 200.0], radius: 10.0, _pad: 0.0 },
-            Instance { a: [300.0, 200.0], b: [200.0, 200.0], radius: 10.0, _pad: 0.0 },
-            // Add more segments or generate from your point set...
-        ];
-
-        let instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance buffer"),
-            contents: bytemuck::cast_slice(&instances_data),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
         // Vertex buffer layouts
-        let vertex_buffers = &[
-            // per-vertex quad
-            // location 0
-            wgpu::VertexBufferLayout {
-                array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[
-                    wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x2,
-                    },
-                ],
-            },
-            // per-instance data
-            wgpu::VertexBufferLayout {
-                array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &[
-                    // a: vec2<f32> -> location 1
-                    wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 1,
-                        format: wgpu::VertexFormat::Float32x2,
-                    },
-                    // b: vec2<f32> -> location 2
-                    wgpu::VertexAttribute {
-                        offset: 8,
-                        shader_location: 2,
-                        format: wgpu::VertexFormat::Float32x2,
-                    },
-                    // radius: f32 -> location 3
-                    wgpu::VertexAttribute {
-                        offset: 16,
-                        shader_location: 3,
-                        format: wgpu::VertexFormat::Float32,
-                    },
-                    // _pad occupies remaining bytes
-                ],
-            },
-        ];
-
-        // getting the screen 
+        // getting the screen
         let screen = ScreenUniform {
             size: [win_size.width as f32, win_size.height as f32],
             _pad: [0.0, 0.0],
@@ -247,19 +169,69 @@ impl State {
             }],
         });
 
+        let shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/compute_to_render.wgsl"));
 
-        let shader_string = include_wesl!("instanced");
-        let shader_source = wgpu::ShaderSource::Wgsl(shader_string.into());
+        let dims = TextureDimsUniform {
+            dims: [buffer_bundle.width as f32, buffer_bundle.height as f32],
+            _pad: [0.0, 0.0],
+        };
+        let dims_ubo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("screen ubo"),
+            contents: bytemuck::bytes_of(&dims),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let input_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("input"),
+            contents: bytemuck::cast_slice(&buffer_bundle.buffer),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        });
 
-        let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Render Shader"),
-            source: shader_source,
+        let input_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("input_bind_group_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None, // or Some(NonZeroU64::new(labels_size).unwrap())
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility:  wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let input_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("input_bind_group"),
+            layout: &input_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: dims_ubo.as_entire_binding(),
+                },
+            ],
         });
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&screen_bind_group_layout],
+                bind_group_layouts: &[&screen_bind_group_layout, &input_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -267,13 +239,13 @@ impl State {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &render_shader,
+                module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: vertex_buffers,
+                buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &render_shader,
+                module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
@@ -308,8 +280,6 @@ impl State {
             cache: None,
         });
 
-
-
         Ok(Self {
             surface,
             device,
@@ -318,14 +288,11 @@ impl State {
             is_surface_configured: false,
             window,
 
-            vertex_buf,
-            index_buf,
-            index_count: indices.len() as u32,
-            instance_buf,
-            instance_count: instances_data.len() as u32,
-
             screen_ubo,
             screen_bind_group,
+
+            dims_ubo,
+            input_bind_group,
 
             render_pipeline,
         })
@@ -341,8 +308,44 @@ impl State {
                 size: [width as f32, height as f32],
                 _pad: [0.0, 0.0],
             };
-            self.queue.write_buffer(&self.screen_ubo, 0, bytemuck::bytes_of(&screen));
+            self.queue
+                .write_buffer(&self.screen_ubo, 0, bytemuck::bytes_of(&screen));
         }
+    }
+    pub fn change_buffer(&mut self, buffer_bundle: BufferBundle) {
+        // muss eine neue sein self.input_bind_group
+        let dims = TextureDimsUniform {
+            dims: [buffer_bundle.width as f32, buffer_bundle.height as f32],
+            _pad: [0.0, 0.0],
+        };
+        let dims_ubo = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("screen ubo"),
+            contents: bytemuck::bytes_of(&dims),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        // self.queue.write_buffer(&self.dims_ubo, 0, bytemuck::bytes_of(&dims));
+
+        let input_buffer = self.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("input"),
+            contents: bytemuck::cast_slice(&buffer_bundle.buffer),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        });
+
+        self.input_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("input_bind_group"),
+            // TODO carefull with hard coded indices
+            layout: &self.render_pipeline.get_bind_group_layout(1),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: dims_ubo.as_entire_binding(),
+                },
+            ],
+        });
+
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -352,7 +355,7 @@ impl State {
         if !self.is_surface_configured {
             return Ok(());
         }
-        
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -363,26 +366,6 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
-        /*
-        // this needs to run every frame, otherwise the buffer will be cleared
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Compute Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(&self.init_pipeline);
-            compute_pass.set_bind_group(0, &self.init_bind_group, &[]);
-            compute_pass.dispatch_workgroups(
-                // workgroup / 2 because it is checking 2x2 blocks
-                self.diffuse_texture_out.texture.width()/16 + self.diffuse_texture_out.texture.width() % 16, 
-                self.diffuse_texture_out.texture.height()/16 + self.diffuse_texture_out.texture.height() % 16, 
-                1
-            );
-
-        }
-        */
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -408,10 +391,8 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.screen_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buf.slice(..));
-            render_pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.index_count, 0, 0..self.instance_count);
+            render_pass.set_bind_group(1, &self.input_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -422,78 +403,46 @@ impl State {
 }
 
 pub struct App {
-    #[cfg(target_arch = "wasm32")]
-    proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     state: Option<State>,
 }
 
 impl App {
-    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let proxy = Some(event_loop.create_proxy());
+    pub fn new() -> Self {
         Self {
             state: None,
-            #[cfg(target_arch = "wasm32")]
-            proxy,
         }
     }
 }
 
-impl ApplicationHandler<State> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        #[allow(unused_mut)]
-        let mut window_attributes = Window::default_attributes();
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen::JsCast;
-            use winit::platform::web::WindowAttributesExtWebSys;
-
-            const CANVAS_ID: &str = "canvas";
-
-            let window = wgpu::web_sys::window().unwrap_throw();
-            let document = window.document().unwrap_throw();
-            let canvas = document.get_element_by_id(CANVAS_ID).unwrap_throw();
-            let html_canvas_element = canvas.unchecked_into();
-            window_attributes = window_attributes.with_canvas(Some(html_canvas_element));
-        }
-
-        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // If we are not on web we can use pollster to
-            // await the
-            self.state = Some(pollster::block_on(State::new(window)).unwrap());
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(proxy) = self.proxy.take() {
-                wasm_bindgen_futures::spawn_local(async move {
-                    assert!(proxy
-                        .send_event(
-                            State::new(window)
-                                .await
-                                .expect("Unable to create canvas!!!")
-                        )
-                        .is_ok())
-                });
-            }
-        }
+// kann ich irgendwie in state userevent reinpacken?
+// wenn es ein feld von state ist, würde es nicht direkt übernommen werden
+// wie wird state hier weiter gegeben?
+impl ApplicationHandler<UserEvent> for App {
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
     }
 
     #[allow(unused_mut)]
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            event.window.request_redraw();
-            event.resize(
-                event.window.inner_size().width,
-                event.window.inner_size().height,
-            );
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, mut event: UserEvent) {
+        match event {
+            UserEvent::SetState(buffer_bundle) => {
+                let mut window_attributes = Window::default_attributes();
+                let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+
+                self.state = Some(pollster::block_on(State::new(window, buffer_bundle)).unwrap());
+                        },
+            UserEvent::UpdateBuffer(buffer_bundle) => 
+            {
+                if let Some(state) = self.state.as_mut() {
+                    state.change_buffer(buffer_bundle);
+                }
+            }
         }
-        self.state = Some(event);
+
+        // wenn UpdateBuffer, müsste updatebuffer die infos drin haben zum updaten.
+        // Vielleicht haben beide Events einen buffer attached?
+        // wenn SetState, soll das hier passieren
+        // self.state = Some(pollster::block_on(State::new(window, buffer_bundle)).unwrap());
+        // muss eine neue sein self.input_bind_group
     }
 
     fn window_event(
@@ -511,6 +460,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
+                // TODO if state
                 match state.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
@@ -528,22 +478,54 @@ impl ApplicationHandler<State> for App {
     }
 }
 
-pub fn run() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         env_logger::init();
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        console_log::init_with_level(log::Level::Info).unwrap_throw();
-    }
 
-    let event_loop = EventLoop::with_user_event().build()?;
-    let mut app = App::new(
-        #[cfg(target_arch = "wasm32")]
-        &event_loop,
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
+
+    let mut app = App::new();
+    tokio::spawn(async move 
+        {
+            // let buffer_bundle = BufferBundle { buffer: vec![0, 1, 0, 1], width: 4, height: 1 };
+            let buffer_bundle = random_buffer_bundle();
+            proxy.send_event(UserEvent::SetState(buffer_bundle)).unwrap();
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                // let buffer_bundle = BufferBundle { buffer: vec![0,1], width: 1, height: 2 };
+                let buffer_bundle = random_buffer_bundle();
+                proxy.send_event(UserEvent::UpdateBuffer(buffer_bundle)).unwrap();
+            }
+        }
     );
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+fn random_buffer_bundle() -> BufferBundle {
+    let mut rng = rand::rng();
+    let mut buffer = vec![];
+    let height = rng.random::<u32>() % 100 + 1;
+    let width = rng.random::<u32>() % 100 + 1;
+    for _ in 0..height {
+        for _ in 0..width {
+            buffer.push(rng.random::<u32>() % 2);
+        }
+    }
+    BufferBundle { buffer, width, height }
+}
+
+// struct for buffer dims+data
+
+// fn for randomizing data in a buffer
+
+
+#[tokio::main]
+async fn main() {
+    // env_logger::init();
+    run().await.unwrap();
 }
